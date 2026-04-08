@@ -8,6 +8,11 @@ import {
   LINE_HEIGHT,
 } from "./layout";
 
+interface Snapshot {
+  text: string;
+  offset: number;
+}
+
 export class Editor {
   private ctx: CanvasRenderingContext2D;
   private canvas: HTMLCanvasElement;
@@ -22,6 +27,8 @@ export class Editor {
   private scrollbarDragStartScrollY = 0;
   private cssWidth = 0;
   private cssHeight = 0;
+  private undoStack: Snapshot[] = [];
+  private redoStack: Snapshot[] = [];
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -48,6 +55,8 @@ export class Editor {
     this.cursor.offset = 0;
     this.cursor.anchor = 0;
     this.scrollY = 0;
+    this.undoStack = [];
+    this.redoStack = [];
     this.reflow();
     this.draw();
   }
@@ -118,9 +127,116 @@ export class Editor {
     return x >= this.cssWidth - SCROLLBAR_WIDTH;
   }
 
+  // --- Undo / Redo ---
+
+  private pushUndo() {
+    this.undoStack.push({ text: this._text, offset: this.cursor.offset });
+    this.redoStack = [];
+  }
+
+  private undo() {
+    const snap = this.undoStack.pop();
+    if (!snap) return;
+    this.redoStack.push({ text: this._text, offset: this.cursor.offset });
+    this._text = snap.text;
+    this.cursor.offset = snap.offset;
+    this.cursor.cancelSelection();
+    this.reflow();
+    this.scrollToCursor();
+    this.draw();
+  }
+
+  private redo() {
+    const snap = this.redoStack.pop();
+    if (!snap) return;
+    this.undoStack.push({ text: this._text, offset: this.cursor.offset });
+    this._text = snap.text;
+    this.cursor.offset = snap.offset;
+    this.cursor.cancelSelection();
+    this.reflow();
+    this.scrollToCursor();
+    this.draw();
+  }
+
+  // --- Keyboard ---
+
   private addKeyboardEvents() {
     document.body.addEventListener("keydown", (e) => {
+      if (e.isComposing) return;
       this.input.focus();
+
+      const cmd = e.metaKey || e.ctrlKey;
+      const alt = e.altKey;
+
+      // Cmd/Ctrl shortcuts
+      if (cmd) {
+        switch (e.key) {
+          case "a":
+            this.selectAll();
+            e.preventDefault();
+            this.draw();
+            return;
+          case "z":
+            if (e.shiftKey) {
+              this.redo();
+            } else {
+              this.undo();
+            }
+            e.preventDefault();
+            return;
+          case "ArrowLeft":
+            this.moveLineStart();
+            break;
+          case "ArrowRight":
+            this.moveLineEnd();
+            break;
+          case "ArrowUp":
+            this.cursor.offset = 0;
+            break;
+          case "ArrowDown":
+            this.cursor.offset = this._text.length;
+            break;
+          case "Backspace":
+            this.deleteToLineStart();
+            break;
+          default:
+            return;
+        }
+        if (!e.shiftKey) {
+          this.cursor.cancelSelection();
+        }
+        e.preventDefault();
+        this.scrollToCursor();
+        this.draw();
+        return;
+      }
+
+      // Alt shortcuts (word-level)
+      if (alt) {
+        switch (e.key) {
+          case "ArrowLeft":
+            this.moveWordLeft();
+            break;
+          case "ArrowRight":
+            this.moveWordRight();
+            break;
+          case "Backspace":
+            this.deleteWordLeft();
+            break;
+          case "Delete":
+            this.deleteWordRight();
+            break;
+          default:
+            return;
+        }
+        if (!e.shiftKey) {
+          this.cursor.cancelSelection();
+        }
+        e.preventDefault();
+        this.scrollToCursor();
+        this.draw();
+        return;
+      }
 
       switch (e.key) {
         case "Backspace":
@@ -160,15 +276,16 @@ export class Editor {
     });
   }
 
+  // --- Pointer ---
+
   private capture(e: PointerEvent) {
-    try { this.capture(e); } catch { /* synthetic or expired pointer */ }
+    try { this.canvas.setPointerCapture(e.pointerId); } catch { /* synthetic or expired pointer */ }
   }
 
   private releaseCapture(e: PointerEvent) {
-    try { this.releaseCapture(e); } catch { /* noop */ }
+    try { this.canvas.releasePointerCapture(e.pointerId); } catch { /* noop */ }
   }
 
-  /** Convert clientX/clientY to canvas-local CSS coordinates */
   private toLocalCoords(e: PointerEvent): { x: number; y: number } {
     const rect = this.canvas.getBoundingClientRect();
     return {
@@ -178,6 +295,17 @@ export class Editor {
   }
 
   private addPointerEvents() {
+    this.canvas.addEventListener("dblclick", (e) => {
+      const rect = this.canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const offset = this.hitTest(x, y);
+      const { start, end } = this.wordBoundaryAt(offset);
+      this.cursor.anchor = start;
+      this.cursor.offset = end;
+      this.draw();
+    });
+
     this.canvas.addEventListener("pointerdown", (e) => {
       const { x, y } = this.toLocalCoords(e);
       // Scrollbar drag
@@ -244,6 +372,8 @@ export class Editor {
     });
   }
 
+  // --- IME / Input ---
+
   private addTextareaEvents() {
     this.input.addEventListener("compositionstart", (e) => {
       (e.target as HTMLTextAreaElement).style.opacity = "1";
@@ -252,19 +382,126 @@ export class Editor {
     this.input.addEventListener("compositionend", (e) => {
       const el = e.target as HTMLTextAreaElement;
       el.style.opacity = "0";
+      el.style.width = "0";
       this.insertText(el.value);
       el.value = "";
     });
 
     this.input.addEventListener("input", (e) => {
       const el = e.target as HTMLTextAreaElement;
-      if (!(e as InputEvent).isComposing) {
+      if ((e as InputEvent).isComposing) {
+        const w = this.ctx.measureText(el.value).width;
+        el.style.width = `${Math.max(w, 10)}px`;
+      } else {
         el.style.opacity = "0";
+        el.style.width = "0";
         this.insertText(el.value);
         el.value = "";
       }
     });
   }
+
+  // --- Word boundary ---
+
+  private getWordSegments(): Array<{ index: number; length: number }> {
+    const segmenter = new Intl.Segmenter(undefined, { granularity: "word" });
+    const result: Array<{ index: number; length: number }> = [];
+    for (const seg of segmenter.segment(this._text)) {
+      result.push({ index: seg.index, length: seg.segment.length });
+    }
+    return result;
+  }
+
+  private wordBoundaryAt(offset: number): { start: number; end: number } {
+    for (const seg of this.getWordSegments()) {
+      const segEnd = seg.index + seg.length;
+      if (offset >= seg.index && offset < segEnd) {
+        return { start: seg.index, end: segEnd };
+      }
+    }
+    return { start: offset, end: offset };
+  }
+
+  private moveWordLeft() {
+    if (this.cursor.offset === 0) return;
+    const segments = this.getWordSegments();
+    for (let i = segments.length - 1; i >= 0; i--) {
+      if (segments[i].index < this.cursor.offset) {
+        this.cursor.offset = segments[i].index;
+        return;
+      }
+    }
+    this.cursor.offset = 0;
+  }
+
+  private moveWordRight() {
+    if (this.cursor.offset >= this._text.length) return;
+    for (const seg of this.getWordSegments()) {
+      const segEnd = seg.index + seg.length;
+      if (segEnd > this.cursor.offset) {
+        this.cursor.offset = segEnd;
+        return;
+      }
+    }
+    this.cursor.offset = this._text.length;
+  }
+
+  private deleteWordLeft() {
+    if (this.cursor.hasSelection) {
+      this.insertText("");
+      return;
+    }
+    if (this.cursor.offset === 0) return;
+    const target = this.cursor.offset;
+    this.moveWordLeft();
+    this.pushUndo();
+    this._text = this._text.slice(0, this.cursor.offset) + this._text.slice(target);
+    this.cursor.cancelSelection();
+    this.reflow();
+    this.scrollToCursor();
+    this.draw();
+  }
+
+  private deleteWordRight() {
+    if (this.cursor.hasSelection) {
+      this.insertText("");
+      return;
+    }
+    if (this.cursor.offset >= this._text.length) return;
+    const from = this.cursor.offset;
+    // Find word end
+    let end = this._text.length;
+    for (const seg of this.getWordSegments()) {
+      const segEnd = seg.index + seg.length;
+      if (segEnd > from) {
+        end = segEnd;
+        break;
+      }
+    }
+    this.pushUndo();
+    this._text = this._text.slice(0, from) + this._text.slice(end);
+    this.reflow();
+    this.draw();
+  }
+
+  private deleteToLineStart() {
+    if (this.cursor.hasSelection) {
+      this.insertText("");
+      return;
+    }
+    const pos = toVisualPosition(this.layout, this.cursor.offset);
+    const lineStart = toAbsoluteOffset(this.layout, pos.row, 0);
+    if (lineStart === this.cursor.offset) return;
+    this.pushUndo();
+    this._text = this._text.slice(0, lineStart) + this._text.slice(this.cursor.offset);
+    this.cursor.offset = lineStart;
+    this.cursor.cancelSelection();
+    this.reflow();
+    this.scrollToCursor();
+    this.draw();
+  }
+
+  // --- Hit testing ---
 
   private hitTest(x: number, y: number): number {
     const lines = this.layout.visualLines;
@@ -287,7 +524,15 @@ export class Editor {
     return toAbsoluteOffset(this.layout, row, col);
   }
 
+  // --- Text mutations ---
+
+  private selectAll() {
+    this.cursor.anchor = 0;
+    this.cursor.offset = this._text.length;
+  }
+
   private insertText(str: string) {
+    this.pushUndo();
     const before = this._text.slice(0, this.cursor.selStart);
     const after = this._text.slice(this.cursor.selEnd);
     this._text = before + str + after;
@@ -304,6 +549,7 @@ export class Editor {
       return;
     }
     if (this.cursor.offset === 0) return;
+    this.pushUndo();
     const before = this._text.slice(0, this.cursor.offset - 1);
     const after = this._text.slice(this.cursor.offset);
     this._text = before + after;
@@ -320,12 +566,15 @@ export class Editor {
       return;
     }
     if (this.cursor.offset >= this._text.length) return;
+    this.pushUndo();
     const before = this._text.slice(0, this.cursor.offset);
     const after = this._text.slice(this.cursor.offset + 1);
     this._text = before + after;
     this.reflow();
     this.draw();
   }
+
+  // --- Cursor movement ---
 
   private moveLeft() {
     if (this.cursor.offset > 0) {
