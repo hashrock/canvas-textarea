@@ -1,50 +1,42 @@
 <!DOCTYPE html>
-<html lang="en">
-
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="X-UA-Compatible" content="ie=edge">
-    <title>Document</title>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Canvas Textarea</title>
     <style>
-        canvas {
-            background: white;
-            position: absolute;
-        }
-
-        textarea {
-            position: absolute;
-            opacity: 1;
-            border: none;
-            line-height: 20px;
-            font-size: 13px;
-            font-family: monospace;
-            opacity: 0;
-            height: 1rem;
-            border-style: none;
-            border-color: Transparent;
-            overflow: auto;
-            outline: none;
-            pointer-events: none;
-        }
-
-        body {
-            background: #EEE;
-        }
-
-        .wrapper {
-            position: relative;
-        }
+      body {
+        background: #eee;
+        margin: 0;
+        display: flex;
+        justify-content: center;
+        padding-top: 40px;
+      }
+      .wrapper {
+        position: relative;
+      }
+      canvas {
+        background: white;
+        display: block;
+      }
+      textarea {
+        position: absolute;
+        opacity: 0;
+        line-height: 20px;
+        font-size: 13px;
+        font-family: monospace;
+        height: 1rem;
+        border: none;
+        outline: none;
+        overflow: auto;
+        pointer-events: none;
+      }
     </style>
-</head>
-
-<body>
-
-    <div width=400 height=300 class="wrapper">
-        <canvas id="canv" width=400 height=300></canvas>
+  </head>
+  <body>
+    <div class="wrapper">
+      <canvas id="canv" width="400" height="300"></canvas>
     </div>
-
-    <script src="./index.ts"></script>
-</body>
-
+    <script type="module" src="/src/main.ts"></script>
+  </body>
 </html>

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Document</title>
+    <style>
+        canvas {
+            background: white;
+            position: absolute;
+        }
+
+        textarea {
+            position: absolute;
+            opacity: 1;
+            border: none;
+            line-height: 20px;
+            font-size: 13px;
+            font-family: monospace;
+            opacity: 0;
+            height: 1rem;
+            border-style: none;
+            border-color: Transparent;
+            overflow: auto;
+            outline: none;
+            pointer-events: none;
+        }
+
+        body {
+            background: #EEE;
+        }
+
+        .wrapper {
+            position: relative;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div width=400 height=300 class="wrapper">
+        <canvas id="canv" width=400 height=300></canvas>
+    </div>
+
+    <script src="./index.ts"></script>
+</body>
+
+</html>
