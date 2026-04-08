@@ -73,3 +73,6 @@ typings/
 .serverless
 
 dist/
+
+# tsc output
+src/*.js
