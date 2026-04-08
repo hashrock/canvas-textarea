@@ -20,9 +20,10 @@ export function redraw(
   layout: TextLayout,
   cursor: Cursor,
   input: HTMLTextAreaElement,
-  scrollY: number
+  scrollY: number,
+  width: number,
+  height: number
 ) {
-  const { width, height } = ctx.canvas;
   ctx.clearRect(0, 0, width, height);
 
   const textAreaWidth = width - SCROLLBAR_WIDTH;
@@ -78,15 +79,16 @@ export function redraw(
   input.style.top = `${cursorY}px`;
 
   // Draw scrollbar
-  drawScrollbar(ctx, layout, scrollY);
+  drawScrollbar(ctx, layout, scrollY, width, height);
 }
 
 function drawScrollbar(
   ctx: CanvasRenderingContext2D,
   layout: TextLayout,
-  scrollY: number
+  scrollY: number,
+  width: number,
+  height: number
 ) {
-  const { width, height } = ctx.canvas;
   const contentHeight = layout.visualLines.length * LINE_HEIGHT;
   if (contentHeight <= height) return;
 

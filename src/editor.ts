@@ -20,9 +20,12 @@ export class Editor {
   private scrollbarDragging = false;
   private scrollbarDragStartY = 0;
   private scrollbarDragStartScrollY = 0;
+  private cssWidth = 0;
+  private cssHeight = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
+    this.setupHiDPI();
     this.ctx = canvas.getContext("2d")!;
     setupCtx(this.ctx);
 
@@ -49,16 +52,27 @@ export class Editor {
     this.draw();
   }
 
+  private setupHiDPI() {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = this.canvas.getBoundingClientRect();
+    this.cssWidth = rect.width || this.canvas.width;
+    this.cssHeight = rect.height || this.canvas.height;
+    this.canvas.width = this.cssWidth * dpr;
+    this.canvas.height = this.cssHeight * dpr;
+    this.canvas.style.width = `${this.cssWidth}px`;
+    this.canvas.style.height = `${this.cssHeight}px`;
+  }
+
   private get contentHeight() {
     return this.layout.visualLines.length * LINE_HEIGHT;
   }
 
   private get maxScrollY() {
-    return Math.max(0, this.contentHeight - this.canvas.height);
+    return Math.max(0, this.contentHeight - this.cssHeight);
   }
 
   private get textAreaWidth() {
-    return this.canvas.width - SCROLLBAR_WIDTH;
+    return this.cssWidth - SCROLLBAR_WIDTH;
   }
 
   private reflow() {
@@ -66,7 +80,12 @@ export class Editor {
   }
 
   private draw() {
-    redraw(this.ctx, this.layout, this.cursor, this.input, this.scrollY);
+    const dpr = window.devicePixelRatio || 1;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    redraw(ctx, this.layout, this.cursor, this.input, this.scrollY, this.cssWidth, this.cssHeight);
+    ctx.restore();
   }
 
   private clampScroll() {
@@ -80,8 +99,8 @@ export class Editor {
 
     if (cursorTop < this.scrollY) {
       this.scrollY = cursorTop;
-    } else if (cursorBottom > this.scrollY + this.canvas.height) {
-      this.scrollY = cursorBottom - this.canvas.height;
+    } else if (cursorBottom > this.scrollY + this.cssHeight) {
+      this.scrollY = cursorBottom - this.cssHeight;
     }
     this.clampScroll();
   }
@@ -96,7 +115,7 @@ export class Editor {
   }
 
   private isOnScrollbar(x: number): boolean {
-    return x >= this.canvas.width - SCROLLBAR_WIDTH;
+    return x >= this.cssWidth - SCROLLBAR_WIDTH;
   }
 
   private addKeyboardEvents() {
@@ -141,25 +160,41 @@ export class Editor {
     });
   }
 
+  private capture(e: PointerEvent) {
+    try { this.capture(e); } catch { /* synthetic or expired pointer */ }
+  }
+
+  private releaseCapture(e: PointerEvent) {
+    try { this.releaseCapture(e); } catch { /* noop */ }
+  }
+
+  /** Convert clientX/clientY to canvas-local CSS coordinates */
+  private toLocalCoords(e: PointerEvent): { x: number; y: number } {
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    };
+  }
+
   private addPointerEvents() {
     this.canvas.addEventListener("pointerdown", (e) => {
+      const { x, y } = this.toLocalCoords(e);
       // Scrollbar drag
-      if (this.isOnScrollbar(e.offsetX)) {
+      if (this.isOnScrollbar(x)) {
         const thumb = getScrollbarThumbRect(
-          this.canvas.height,
+          this.cssHeight,
           this.contentHeight,
           this.scrollY,
-          this.canvas.width
+          this.cssWidth
         );
-        if (thumb && e.offsetY >= thumb.y && e.offsetY <= thumb.y + thumb.h) {
-          // Drag thumb
+        if (thumb && y >= thumb.y && y <= thumb.y + thumb.h) {
           this.scrollbarDragging = true;
-          this.scrollbarDragStartY = e.offsetY;
+          this.scrollbarDragStartY = y;
           this.scrollbarDragStartScrollY = this.scrollY;
-          this.canvas.setPointerCapture(e.pointerId);
+          this.capture(e);
         } else if (this.maxScrollY > 0) {
-          // Click on track — jump to position
-          const ratio = e.offsetY / this.canvas.height;
+          const ratio = y / this.cssHeight;
           this.scrollY = ratio * this.maxScrollY;
           this.clampScroll();
           this.draw();
@@ -167,17 +202,20 @@ export class Editor {
         return;
       }
 
-      const offset = this.hitTest(e.offsetX, e.offsetY);
+      const offset = this.hitTest(x, y);
       this.cursor.offset = offset;
       this.cursor.cancelSelection();
       this.mousedown = true;
+      this.capture(e);
       this.draw();
     });
 
     this.canvas.addEventListener("pointermove", (e) => {
+      const { x, y } = this.toLocalCoords(e);
+
       if (this.scrollbarDragging) {
-        const deltaY = e.offsetY - this.scrollbarDragStartY;
-        const trackRange = this.canvas.height - Math.max(24, (this.canvas.height / this.contentHeight) * this.canvas.height);
+        const deltaY = y - this.scrollbarDragStartY;
+        const trackRange = this.cssHeight - Math.max(24, (this.cssHeight / this.contentHeight) * this.cssHeight);
         if (trackRange > 0) {
           this.scrollY = this.scrollbarDragStartScrollY + (deltaY / trackRange) * this.maxScrollY;
           this.clampScroll();
@@ -186,7 +224,7 @@ export class Editor {
         return;
       }
       if (this.mousedown) {
-        this.cursor.offset = this.hitTest(e.offsetX, e.offsetY);
+        this.cursor.offset = this.hitTest(x, y);
         this.scrollToCursor();
         this.draw();
       }
@@ -195,10 +233,13 @@ export class Editor {
     this.canvas.addEventListener("pointerup", (e) => {
       if (this.scrollbarDragging) {
         this.scrollbarDragging = false;
-        this.canvas.releasePointerCapture(e.pointerId);
+        this.releaseCapture(e);
         return;
       }
-      this.mousedown = false;
+      if (this.mousedown) {
+        this.mousedown = false;
+        this.releaseCapture(e);
+      }
       this.input.focus();
     });
   }
