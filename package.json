@@ -11,5 +11,8 @@
   "devDependencies": {
     "typescript": "^5.8.0",
     "vite": "^6.2.0"
+  },
+  "dependencies": {
+    "@chenglou/pretext": "^0.0.4"
   }
 }

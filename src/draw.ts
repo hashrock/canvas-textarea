@@ -1,79 +1,168 @@
 import { Cursor } from "./cursor";
+import {
+  type TextLayout,
+  toVisualPosition,
+  FONT,
+  FONT_SIZE,
+  LINE_HEIGHT,
+} from "./layout";
 
-export const FONT_SIZE = 13;
-export const LINE_HEIGHT = FONT_SIZE * 1.5;
+export const SCROLLBAR_WIDTH = 12;
 
-export function setupTextDrawStyle(ctx: CanvasRenderingContext2D) {
-  ctx.font = `${FONT_SIZE}px "Courier New", monospace`;
+export function setupCtx(ctx: CanvasRenderingContext2D) {
+  ctx.font = FONT;
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
-  ctx.fillStyle = "rgba(0,0,0,1.0)";
 }
 
 export function redraw(
   ctx: CanvasRenderingContext2D,
-  lines: string[],
+  layout: TextLayout,
   cursor: Cursor,
-  offset: number,
-  input: HTMLTextAreaElement
+  input: HTMLTextAreaElement,
+  scrollY: number
 ) {
-  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  const { width, height } = ctx.canvas;
+  ctx.clearRect(0, 0, width, height);
 
-  const thisLine = lines[cursor.r] ?? "";
-  const m = thisLine.slice(0, cursor.c);
-  const measure = ctx.measureText(m);
+  const textAreaWidth = width - SCROLLBAR_WIDTH;
+  const cursorPos = toVisualPosition(layout, cursor.offset);
+  const selStart = cursor.selStart;
+  const selEnd = cursor.selEnd;
 
-  lines.forEach((item, i) => {
-    ctx.fillStyle = `hsl(${(i + offset) * 10}, 100%, 80%)`;
-    drawSelection(ctx, i, item, cursor);
-    drawTextLine(ctx, item, i);
-  });
+  // Clip text area (exclude scrollbar region)
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, textAreaWidth, height);
+  ctx.clip();
 
-  drawCursor(ctx, measure, cursor);
-  input.style.left = `${measure.width}px`;
-  input.style.top = `${cursor.r * LINE_HEIGHT}px`;
-}
+  const totalLines = layout.visualLines.length;
+  const firstVisible = Math.max(0, Math.floor(scrollY / LINE_HEIGHT));
+  const lastVisible = Math.min(
+    totalLines - 1,
+    Math.ceil((scrollY + height) / LINE_HEIGHT)
+  );
 
-function drawTextLine(
-  ctx: CanvasRenderingContext2D,
-  item: string,
-  i: number
-) {
-  ctx.fillStyle = "black";
-  ctx.fillText(item, 0, i * LINE_HEIGHT + (LINE_HEIGHT - FONT_SIZE) / 2);
-}
+  for (let i = firstVisible; i <= lastVisible; i++) {
+    const vl = layout.visualLines[i];
+    const y = i * LINE_HEIGHT - scrollY;
 
-function drawSelection(
-  ctx: CanvasRenderingContext2D,
-  i: number,
-  item: string,
-  cursor: Cursor
-) {
-  if (cursor.start.r === i && cursor.end.r === i) {
-    const s = ctx.measureText(item.slice(0, cursor.start.c));
-    const m = ctx.measureText(item.slice(cursor.start.c, cursor.end.c));
-    ctx.fillRect(s.width, LINE_HEIGHT * i, m.width, LINE_HEIGHT);
-  } else if (cursor.start.r === i) {
-    const s = ctx.measureText(item.slice(0, cursor.start.c));
-    const m = ctx.measureText(item.slice(cursor.start.c));
-    ctx.fillRect(s.width, LINE_HEIGHT * i, m.width, LINE_HEIGHT);
-  } else if (cursor.end.r === i) {
-    const s = ctx.measureText(item.slice(0, cursor.end.c));
-    ctx.fillRect(0, LINE_HEIGHT * i, s.width, LINE_HEIGHT);
+    // Draw selection highlight
+    if (cursor.hasSelection) {
+      drawSelectionForLine(ctx, vl.startOffset, vl.text, selStart, selEnd, y);
+    }
+
+    // Draw text
+    ctx.fillStyle = "black";
+    ctx.font = FONT;
+    ctx.fillText(vl.text, 0, y + (LINE_HEIGHT - FONT_SIZE) / 2);
   }
-  if (cursor.end.r > i && cursor.start.r < i) {
-    const m2 = ctx.measureText(item);
-    ctx.fillRect(0, LINE_HEIGHT * i, m2.width, LINE_HEIGHT);
-  }
+
+  // Draw cursor
+  const cursorLine = layout.visualLines[cursorPos.row];
+  const textBeforeCursor = cursorLine.text.slice(0, cursorPos.col);
+  ctx.font = FONT;
+  const cursorX = ctx.measureText(textBeforeCursor).width;
+  const cursorY = cursorPos.row * LINE_HEIGHT - scrollY;
+
+  ctx.beginPath();
+  ctx.strokeStyle = "black";
+  ctx.moveTo(cursorX + 0.5, cursorY);
+  ctx.lineTo(cursorX + 0.5, cursorY + LINE_HEIGHT);
+  ctx.stroke();
+
+  ctx.restore();
+
+  // Position hidden textarea for IME
+  input.style.left = `${cursorX}px`;
+  input.style.top = `${cursorY}px`;
+
+  // Draw scrollbar
+  drawScrollbar(ctx, layout, scrollY);
 }
 
-function drawCursor(
+function drawScrollbar(
   ctx: CanvasRenderingContext2D,
-  measure: TextMetrics,
-  cursor: Cursor
+  layout: TextLayout,
+  scrollY: number
+) {
+  const { width, height } = ctx.canvas;
+  const contentHeight = layout.visualLines.length * LINE_HEIGHT;
+  if (contentHeight <= height) return;
+
+  const trackX = width - SCROLLBAR_WIDTH;
+
+  // Track background
+  ctx.fillStyle = "rgba(0, 0, 0, 0.05)";
+  ctx.fillRect(trackX, 0, SCROLLBAR_WIDTH, height);
+
+  // Thumb
+  const thumbHeight = Math.max(24, (height / contentHeight) * height);
+  const maxScrollY = contentHeight - height;
+  const thumbY = (scrollY / maxScrollY) * (height - thumbHeight);
+
+  ctx.fillStyle = "rgba(0, 0, 0, 0.25)";
+  roundRect(ctx, trackX + 2, thumbY + 2, SCROLLBAR_WIDTH - 4, thumbHeight - 4, 3);
+  ctx.fill();
+}
+
+function roundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number
 ) {
   ctx.beginPath();
-  ctx.moveTo(measure.width + 0.5, cursor.r * LINE_HEIGHT);
-  ctx.lineTo(measure.width + 0.5, cursor.r * LINE_HEIGHT + LINE_HEIGHT);
-  ctx.stroke();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function drawSelectionForLine(
+  ctx: CanvasRenderingContext2D,
+  lineStartOffset: number,
+  lineText: string,
+  selStart: number,
+  selEnd: number,
+  y: number
+) {
+  const lineEnd = lineStartOffset + lineText.length;
+
+  if (selEnd <= lineStartOffset || selStart >= lineEnd) return;
+
+  const localStart = Math.max(0, selStart - lineStartOffset);
+  const localEnd = Math.min(lineText.length, selEnd - lineStartOffset);
+
+  const xStart = ctx.measureText(lineText.slice(0, localStart)).width;
+  const xEnd = ctx.measureText(lineText.slice(0, localEnd)).width;
+
+  ctx.fillStyle = "hsl(210, 80%, 80%)";
+  ctx.fillRect(xStart, y, xEnd - xStart, LINE_HEIGHT);
+}
+
+export function getScrollbarThumbRect(
+  canvasHeight: number,
+  contentHeight: number,
+  scrollY: number,
+  canvasWidth: number
+): { x: number; y: number; w: number; h: number } | null {
+  if (contentHeight <= canvasHeight) return null;
+  const thumbHeight = Math.max(24, (canvasHeight / contentHeight) * canvasHeight);
+  const maxScrollY = contentHeight - canvasHeight;
+  const thumbY = (scrollY / maxScrollY) * (canvasHeight - thumbHeight);
+  return {
+    x: canvasWidth - SCROLLBAR_WIDTH + 2,
+    y: thumbY + 2,
+    w: SCROLLBAR_WIDTH - 4,
+    h: thumbHeight - 4,
+  };
 }
